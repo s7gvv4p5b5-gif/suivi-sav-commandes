@@ -94,28 +94,29 @@ label{font-size:12px;color:var(--sub);font-weight:600;display:block;margin:9px 0
 <main id="main"></main>
 <button class="fab" id="fab" title="Nouveau dossier">+</button>
 
-<script>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js";
+import { getFirestore, collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyAwV4XhsQXOMLtkGcl1wNC6__f-jaTo2LM",
+  authDomain: "suivi-sav-d44c2.firebaseapp.com",
+  projectId: "suivi-sav-d44c2",
+  storageBucket: "suivi-sav-d44c2.firebasestorage.app",
+  messagingSenderId: "239365712544",
+  appId: "1:239365712544:web:3e97a6b8654add538477c5"
+};
+const fbApp = initializeApp(firebaseConfig);
+const dbFs = getFirestore(fbApp);
+const dossiersCol = collection(dbFs,'dossiers');
+const employesCol = collection(dbFs,'employes');
+
 const SAV_STATUTS=["Ouvert","Envoyé au fournisseur","En attente fournisseur","Pièce reçue","Prêt pour retrait","Terminé"];
 const CMD_STATUTS=["Commandée","Envoyée au fournisseur","En attente fournisseur","Expédiée","Reçue en magasin","Livrée au client","Annulée"];
 const CLOSED=new Set(["Terminé","Livrée au client","Annulée"]);
 let dossiers=[], employes=[];
 let state={tab:'dash', filters:{}, search:''};
-const STORE_KEY='sav_commandes_store_v1';
-
-function loadStore(){
-  try{
-    const raw=localStorage.getItem(STORE_KEY);
-    if(raw){ const p=JSON.parse(raw); dossiers=p.dossiers||[]; employes=p.employes||[]; }
-  }catch(e){ console.error(e); }
-  if(!employes.length){
-    employes=['Tim','Denis','Tony','Adrien','Sofia','Maël','Jey','Nico','Théo'].map(nom=>({id:uid(),nom}));
-    persist();
-  }
-}
-function persist(){
-  try{ localStorage.setItem(STORE_KEY, JSON.stringify({dossiers,employes})); }
-  catch(e){ toast('Erreur de sauvegarde locale'); }
-}
+let empSeeded=false;
 
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.style.display='block';clearTimeout(window._tt);window._tt=setTimeout(()=>t.style.display='none',2200);}
 function uid(){return Math.random().toString(36).slice(2,9);}
@@ -134,18 +135,29 @@ function urgency(d){
 function badge(u){return `<span class="badge b-${u.level}">${u.icon} ${u.label}</span>`;}
 
 function initDb(){
-  loadStore();
+  onSnapshot(dossiersCol, snap=>{
+    dossiers = snap.docs.map(d=>({id:d.id,...d.data()}));
+    render();
+  }, e=>{ console.error(e); toast('Erreur de connexion à la base'); });
+  onSnapshot(employesCol, async snap=>{
+    employes = snap.docs.map(d=>({id:d.id,...d.data()}));
+    if(!empSeeded && employes.length===0){
+      empSeeded=true;
+      for(const nom of ['Tim','Denis','Tony','Adrien','Sofia','Maël','Jey','Nico','Théo']){
+        await addDoc(employesCol, {nom});
+      }
+    }
+    render();
+  }, e=>console.error(e));
   render();
 }
 
 async function saveDossier(data, id){
-  if(id){ const i=dossiers.findIndex(d=>d.id===id); if(i>=0) dossiers[i]={...dossiers[i],...data}; }
-  else { dossiers.push({id:uid(), ...data}); }
-  persist(); render();
+  if(id){ await updateDoc(doc(dbFs,'dossiers',id), data); }
+  else { await addDoc(dossiersCol, data); }
 }
 async function deleteDossier(id){
-  dossiers=dossiers.filter(d=>d.id!==id);
-  persist(); render();
+  await deleteDoc(doc(dbFs,'dossiers',id));
 }
 
 // ---------- Rendering ----------
@@ -363,12 +375,12 @@ function bindDynamic(){
   const fF=document.getElementById('fFournisseur'); if(fF) fF.oninput=()=>{state.filters.fournisseur=fF.value; render();};
   const fL=document.getElementById('fLate'); if(fL) fL.onchange=()=>{state.filters.late=fL.value==='1'; render();};
   const addEmp=document.getElementById('addEmpBtn');
-  if(addEmp) addEmp.onclick=()=>{
+  if(addEmp) addEmp.onclick=async()=>{
     const v=document.getElementById('newEmpName').value.trim();
-    if(v){ employes.push({id:uid(),nom:v}); persist(); toast('Employé ajouté'); render(); }
+    if(v){ await addDoc(employesCol, {nom:v}); toast('Employé ajouté'); }
   };
   document.querySelectorAll('[data-delemp]').forEach(b=>{
-    b.onclick=()=>{ employes=employes.filter(e=>e.id!==b.dataset.delemp); persist(); render(); };
+    b.onclick=async()=>{ await deleteDoc(doc(dbFs,'employes',b.dataset.delemp)); };
   });
   const impFile=document.getElementById('importFile');
   if(impFile) impFile.onchange=(e)=>handleImport(e.target.files[0], document.getElementById('importType').value);
@@ -417,10 +429,9 @@ async function handleImport(file, type){
     };
     if(type==='sav') data.dateDepot=new Date().toISOString().slice(0,10);
     else data.dateCommande=new Date().toISOString().slice(0,10);
-    dossiers.push({id:uid(), ...data});
+    await addDoc(dossiersCol, data);
     count++;
   }
-  persist(); render();
   toast(`${count} dossier(s) importé(s)`);
 }
 
